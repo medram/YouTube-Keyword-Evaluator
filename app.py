@@ -277,8 +277,22 @@ def analyse_keyword(yt, keyword: str) -> dict:
     if not search_items:
         return {"error": "No results found.", "keyword": keyword}
 
-    video_ids  = [item["id"]["videoId"]        for item in search_items]
-    ch_ids_raw = [item["snippet"]["channelId"]  for item in search_items]
+    # Filter items and safely extract IDs
+    video_ids = []
+    ch_ids_raw = []
+    
+    for item in search_items:
+        # Check if item has expected video structure
+        if (item.get("id") and 
+            isinstance(item["id"], dict) and 
+            "videoId" in item["id"] and 
+            item.get("snippet") and 
+            "channelId" in item["snippet"]):
+            video_ids.append(item["id"]["videoId"])
+            ch_ids_raw.append(item["snippet"]["channelId"])
+    
+    if not video_ids:
+        return {"error": "No valid video results found.", "keyword": keyword}
 
     vid_map   = get_video_details(yt, video_ids)
     unique_ch = list(dict.fromkeys(ch_ids_raw))
