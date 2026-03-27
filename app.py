@@ -167,10 +167,10 @@ def years_since(dt: datetime) -> float:
 
 
 # ──────────────────────────────────────────────────────────────
-#  KOS Scoring  (max = 40 + 35 + 27 = 102, capped at 100)
+#  KOS Scoring  (max = 52 + 35 + 27 = 114, capped at 100)
 # ──────────────────────────────────────────────────────────────
 
-def score_group_a(avg_views, avg_like_ratio, avg_age_months, avg_comments):
+def score_group_a(avg_views, avg_like_ratio, avg_age_months, avg_comments, avg_views_per_month):
     pts = {}
 
     if   avg_views >= 1_000_000: pts["Avg Views"]          = 0
@@ -191,7 +191,14 @@ def score_group_a(avg_views, avg_like_ratio, avg_age_months, avg_comments):
     elif avg_comments >= 500:  pts["Avg Comments"]   = 3
     else:                      pts["Avg Comments"]   = 5
 
-    return pts  # max 40
+    # Viral metric - Views per Month (higher is better for easier ranking)
+    if   avg_views_per_month >= 500_000: pts["Views per Month"] = 0   # Very viral content = harder to compete
+    elif avg_views_per_month >= 100_000: pts["Views per Month"] = 3
+    elif avg_views_per_month >= 50_000:  pts["Views per Month"] = 6
+    elif avg_views_per_month >= 10_000:  pts["Views per Month"] = 9
+    else:                                pts["Views per Month"] = 12  # Lower viral content = easier opportunity
+
+    return pts  # max 52
 
 
 def score_group_b(avg_subs, avg_vid_count, avg_ch_age_years):
@@ -328,6 +335,8 @@ def analyse_keyword(yt, keyword: str) -> dict:
         total_comments += comments
 
         like_ratio = likes / views if views > 0 else 0
+        # Calculate views per month (viral metric - higher is better)
+        views_per_month = views / age_mo if age_mo > 0 else 0
 
         videos.append({
             "Rank":          rank,
@@ -341,6 +350,8 @@ def analyse_keyword(yt, keyword: str) -> dict:
             "Likes (fmt)":   fmt_number(likes),
             "Like Ratio":    f"{like_ratio*100:.2f}%",
             "Comments":      comments,
+            "Views per Month": views_per_month,
+            "Views/Month (fmt)": fmt_number(int(views_per_month)),
             "KW in Title":   tc,
             "KW in Desc":    dc,
             "URL":           f"https://youtu.be/{vid_id}",
@@ -352,6 +363,9 @@ def analyse_keyword(yt, keyword: str) -> dict:
     avg_comments   = total_comments / n if n else 0
     avg_like_ratio = total_likes / total_views if total_views > 0 else 0
     avg_age_months = sum(age_months_list) / len(age_months_list) if age_months_list else 24
+    # Calculate average views per month (viral metric)
+    total_views_per_month = sum(v["Views per Month"] for v in videos)
+    avg_views_per_month = total_views_per_month / n if n else 0
 
     # ── Build channel list ───────────────────
     channels = []
@@ -385,7 +399,7 @@ def analyse_keyword(yt, keyword: str) -> dict:
     avg_ch_age_y  = sum(c["_age_years"]  for c in top4) / len(top4) if top4 else 3.0
 
     # ── KOS ──────────────────────────────────
-    pts_a   = score_group_a(avg_views, avg_like_ratio, avg_age_months, avg_comments)
+    pts_a   = score_group_a(avg_views, avg_like_ratio, avg_age_months, avg_comments, avg_views_per_month)
     pts_b   = score_group_b(avg_subs, avg_vid_count, avg_ch_age_y)
     pts_c   = score_group_c(kw_in_title, kw_in_desc)
     score_a = sum(pts_a.values())
@@ -404,6 +418,7 @@ def analyse_keyword(yt, keyword: str) -> dict:
         "avg_comments":      int(avg_comments),
         "avg_like_ratio":    avg_like_ratio,
         "avg_age_months":    avg_age_months,
+        "avg_views_per_month": int(avg_views_per_month),
         "kw_in_title":       kw_in_title,
         "kw_in_desc":        kw_in_desc,
         "kos":               kos,
@@ -490,7 +505,7 @@ def render_result(res: dict):
         )
     with col_a:
         st.markdown(
-            group_bar_html(res["score_a"], 40, "#4fc3f7", "Group A — Videos",   res["pts_a"]),
+            group_bar_html(res["score_a"], 52, "#4fc3f7", "Group A — Videos",   res["pts_a"]),
             unsafe_allow_html=True,
         )
     with col_b:
@@ -508,14 +523,15 @@ def render_result(res: dict):
     st.markdown("<br>", unsafe_allow_html=True)
 
     # Row 2 — supporting metric strip
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
     for col, label, val in [
         (m1, "👁️ Avg Views",      fmt_number(res["avg_views"])),
         (m2, "👍 Avg Like Ratio", f"{res['avg_like_ratio']*100:.2f}%"),
         (m3, "💬 Avg Comments",   fmt_number(res["avg_comments"])),
         (m4, "📅 Avg Video Age",  f"{res['avg_age_months']:.0f} mo"),
-        (m5, "🔤 KW in Titles",   str(res["kw_in_title"])),
-        (m6, "📝 KW in Descs",    str(res["kw_in_desc"])),
+        (m5, "🚀 Views/Month",    fmt_number(res["avg_views_per_month"])),
+        (m6, "🔤 KW in Titles",   str(res["kw_in_title"])),
+        (m7, "📝 KW in Descs",    str(res["kw_in_desc"])),
     ]:
         with col:
             st.markdown(
@@ -548,8 +564,8 @@ def render_result(res: dict):
     vid_df = pd.DataFrame(res["videos"])[[
         "Rank", "Title", "Channel", "Published",
         "Views (fmt)", "Likes (fmt)", "Like Ratio",
-        "Comments", "KW in Title", "KW in Desc", "URL",
-    ]].rename(columns={"Views (fmt)": "Views", "Likes (fmt)": "Likes"}).set_index("Rank")
+        "Views/Month (fmt)", "Comments", "KW in Title", "KW in Desc", "URL",
+    ]].rename(columns={"Views (fmt)": "Views", "Likes (fmt)": "Likes", "Views/Month (fmt)": "Views/Mo"}).set_index("Rank")
     st.dataframe(vid_df, use_container_width=True,
                  column_config={"URL": st.column_config.LinkColumn("Video URL")})
 
@@ -578,14 +594,14 @@ def results_to_excel(results: list) -> bytes:
         for r in results:
             if "error" in r:
                 summary_rows.append({"Keyword": r.get("keyword",""), "KOS": "ERROR",
-                    "Label":"","Score A /40":"","Score B /35":"","Score C /27":"",
+                    "Label":"","Score A /52":"","Score B /35":"","Score C /27":"",
                     "Avg Views":"","KW Titles":"","KW Descs":""})
             else:
                 summary_rows.append({
                     "Keyword":       r["keyword"],
                     "KOS":           r["kos"],
                     "Label":         r["kos_label"],
-                    "Score A /40":   r["score_a"],
+                    "Score A /52":   r["score_a"],
                     "Score B /35":   r["score_b"],
                     "Score C /27":   r["score_c"],
                     "Avg Views":     r["avg_views"],
@@ -608,7 +624,7 @@ def results_to_excel(results: list) -> bytes:
             # Videos sheet
             pd.DataFrame(r["videos"])[[
                 "Rank","Title","Channel","Published","Views","Likes",
-                "Like Ratio","Comments","KW in Title","KW in Desc","URL"
+                "Like Ratio","Views per Month","Comments","KW in Title","KW in Desc","URL"
             ]].to_excel(writer, sheet_name=f"{safe}_videos", index=False)
 
             # Channels sheet
@@ -618,7 +634,7 @@ def results_to_excel(results: list) -> bytes:
 
             # Score breakdown sheet
             MAX_A = {"Avg Views": 15, "Likes / Views Ratio": 10,
-                     "Avg Video Age": 10, "Avg Comments": 5}
+                     "Avg Video Age": 10, "Avg Comments": 5, "Views per Month": 12}
             MAX_B = {"Avg Subscribers": 15, "Avg Video Count": 10, "Avg Channel Age": 10}
             MAX_C = {"KW in Titles": 10, "KW in Descriptions": 10, "Saturation Index": 7}
             bd_rows = (
@@ -787,7 +803,7 @@ Each row is processed one by one with a live progress table.
                             "Status":   "✅ Done",
                             "KOS":      res["kos"],
                             "Label":    f"{res['kos_emoji']} {res['kos_label']}",
-                            "A /40":    res["score_a"],
+                            "A /52":    res["score_a"],
                             "B /35":    res["score_b"],
                             "C /27":    res["score_c"],
                             "Avg Views":fmt_number(res["avg_views"]),
@@ -811,7 +827,7 @@ Each row is processed one by one with a live progress table.
                     "Keyword":    r["keyword"],
                     "KOS":        r["kos"],
                     "Label":      f"{r['kos_emoji']} {r['kos_label']}",
-                    "A /40":      r["score_a"],
+                    "A /52":      r["score_a"],
                     "B /35":      r["score_b"],
                     "C /27":      r["score_c"],
                     "Avg Views":  fmt_number(r["avg_views"]),
