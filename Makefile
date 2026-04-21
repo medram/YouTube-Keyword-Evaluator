@@ -94,14 +94,6 @@ mcp:
 	@echo ""
 	uv run python mcp_server.py --transport stdio
 
-mcp-sse:
-	@echo "🤖 Starting MCP server (SSE mode)..."
-	@echo "   → SSE endpoint: http://localhost:$${MCP_PORT:-8001}"
-	@echo ""
-	uv run python mcp_server.py \
-		--transport sse \
-		--host $${MCP_HOST:-0.0.0.0} \
-		--port $${MCP_PORT:-8001}
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 

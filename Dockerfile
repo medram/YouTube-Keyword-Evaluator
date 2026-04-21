@@ -1,6 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
 #  YouTube Keyword Evaluator — Multi-service Dockerfile
-#  Runs Streamlit (8501), FastAPI (8000), and MCP SSE server (8001)
+#  Runs Streamlit (8501) and FastAPI + MCP (8000, MCP at /mcp)
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM python:3.12-slim
@@ -22,12 +22,11 @@ RUN uv sync --no-dev --no-install-project
 # Copy application code
 COPY . .
 
-# Expose all three service ports
-EXPOSE 8000 8001 8501
+# Expose service ports (FastAPI+MCP on 8000, Streamlit on 8501)
+EXPOSE 8000 8501
 
-# Start all three servers in parallel
+# Start both servers in parallel
 CMD uv run uvicorn api:app --host 0.0.0.0 --port 8000 & \
-    uv run python mcp_server.py --transport sse --host 0.0.0.0 --port 8001 & \
     uv run streamlit run app.py \
         --server.address=0.0.0.0 \
         --server.port=8501 \

@@ -39,10 +39,16 @@ except ImportError:
     pass  # python-dotenv is optional; env vars can be set directly
 
 from analyzer import DEFAULT_SETTINGS, analyse_keyword
+from mcp_server import mcp as mcp_server
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  App setup
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Build the MCP sub-app first so we can hand its lifespan to FastAPI.
+# path="/" is required: FastAPI strips the "/mcp" mount prefix before passing
+# the request to the sub-app, so FastMCP must register its handler at "/".
+_mcp_app = mcp_server.http_app(transport="streamable-http", path="/")
 
 app = FastAPI(
     title="YouTube Keyword Evaluator API",
@@ -58,6 +64,9 @@ app = FastAPI(
         "url": "https://github.com/medram/YouTube-Keyword-Evaluator",
     },
     license_info={"name": "MIT"},
+    # FastMCP's StreamableHTTPSessionManager must be initialised via the
+    # lifespan context; wiring it here satisfies that requirement.
+    lifespan=_mcp_app.lifespan,
 )
 
 app.add_middleware(
@@ -67,6 +76,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount the MCP server at /mcp
+app.mount("/mcp", _mcp_app)
 
 # Optional: simple in-process request rate stats (no external deps)
 _stats: dict[str, Any] = {"requests": 0, "errors": 0, "start_time": time.time()}
@@ -330,6 +342,33 @@ async def health():
         "total_errors": _stats["errors"],
         "youtube_api_key_configured": bool(_ENV_API_KEY),
     }
+
+
+@app.get(
+    "/api/v1/cache",
+    summary="Cache statistics",
+    tags=["System"],
+    response_description="Current in-memory cache stats",
+)
+async def get_cache_stats():
+    """Returns statistics for the in-memory keyword analysis cache."""
+    from analyzer import cache_stats
+
+    return cache_stats()
+
+
+@app.delete(
+    "/api/v1/cache",
+    summary="Clear cache",
+    tags=["System"],
+    response_description="Number of entries cleared",
+)
+async def clear_cache():
+    """Clears all cached keyword analysis results."""
+    from analyzer import cache_clear
+
+    cleared = cache_clear()
+    return {"cleared": cleared}
 
 
 @app.get(

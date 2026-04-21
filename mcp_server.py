@@ -80,13 +80,24 @@ mcp = FastMCP(
 _ENV_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "")
 
 
-def _get_api_key(youtube_api_key: str) -> str:
-    """Resolve the API key: explicit arg > env var."""
-    key = (youtube_api_key or "").strip() or _ENV_API_KEY.strip()
+def _get_api_key() -> str:
+    """Resolve the API key: X-YouTube-API-Key header > YOUTUBE_API_KEY env var."""
+    key = ""
+    if not key:
+        # Try the HTTP request header (available when running via FastAPI mount)
+        try:
+            from fastmcp.server.dependencies import get_http_request
+
+            request = get_http_request()
+            key = (request.headers.get("x-youtube-api-key") or "").strip()
+        except Exception:
+            pass
+    if not key:
+        key = _ENV_API_KEY.strip()
     if not key:
         raise ValueError(
             "No YouTube API key available. "
-            "Pass youtube_api_key= or set the YOUTUBE_API_KEY environment variable."
+            "Set the X-YouTube-API-Key header or the YOUTUBE_API_KEY environment variable."
         )
     return key
 
@@ -104,7 +115,6 @@ def _run_analysis(api_key: str, keyword: str, settings: dict | None = None) -> d
 @mcp.tool()
 def analyze_keyword(
     keyword: str,
-    youtube_api_key: str = "",
     full_data: bool = False,
 ) -> str:
     """
@@ -117,14 +127,13 @@ def analyze_keyword(
       0–24   → Very Competitive  (🔴)
 
     Args:
-        keyword:         The YouTube search term to analyse (e.g. "lofi study music").
-        youtube_api_key: YouTube Data API v3 key. Falls back to YOUTUBE_API_KEY env var.
-        full_data:       If True, also return the top 10 competing videos and top 4 channels.
+        keyword:   The YouTube search term to analyse (e.g. "lofi study music").
+        full_data: If True, also return the top 10 competing videos and top 4 channels.
 
     Returns:
         A Markdown-formatted report.
     """
-    key = _get_api_key(youtube_api_key)
+    key = _get_api_key()
     raw = _run_analysis(key, keyword)
 
     if "error" in raw:
@@ -201,7 +210,6 @@ def analyze_keyword(
 @mcp.tool()
 def bulk_analyze_keywords(
     keywords: list[str],
-    youtube_api_key: str = "",
     full_data: bool = False,
 ) -> str:
     """
@@ -211,9 +219,8 @@ def bulk_analyze_keywords(
     Markdown table sorted alphabetically, followed by individual reports.
 
     Args:
-        keywords:        List of keywords to analyse (max 10).
-        youtube_api_key: YouTube Data API v3 key. Falls back to YOUTUBE_API_KEY env var.
-        full_data:       If True, include top videos and channels for each keyword.
+        keywords:  List of keywords to analyse (max 10).
+        full_data: If True, include top videos and channels for each keyword.
 
     Returns:
         A Markdown summary table followed by per-keyword reports.
@@ -225,7 +232,7 @@ def bulk_analyze_keywords(
             "❌ Maximum 10 keywords per bulk call. Please split into smaller batches."
         )
 
-    key = _get_api_key(youtube_api_key)
+    key = _get_api_key()
     keywords = [k.strip() for k in keywords if k.strip()]
 
     results = [_run_analysis(key, kw) for kw in keywords]
@@ -284,7 +291,6 @@ def bulk_analyze_keywords(
 @mcp.tool()
 def compare_keywords(
     keywords: list[str],
-    youtube_api_key: str = "",
 ) -> str:
     """
     Compare multiple YouTube keywords and recommend the best one to target.
@@ -296,8 +302,7 @@ def compare_keywords(
     recommendation on which one to go with.
 
     Args:
-        keywords:        2–10 keywords to compare.
-        youtube_api_key: YouTube Data API v3 key. Falls back to YOUTUBE_API_KEY env var.
+        keywords: 2–10 keywords to compare.
 
     Returns:
         Ranked comparison table + recommendation with reasoning.
@@ -307,7 +312,7 @@ def compare_keywords(
     if len(keywords) > 10:
         return "❌ Maximum 10 keywords per comparison."
 
-    key = _get_api_key(youtube_api_key)
+    key = _get_api_key()
     keywords = [k.strip() for k in keywords if k.strip()]
 
     results = [_run_analysis(key, kw) for kw in keywords]
@@ -523,7 +528,6 @@ def explain_kos_score(score: int) -> str:
 @mcp.tool()
 def get_video_insights(
     keyword: str,
-    youtube_api_key: str = "",
 ) -> str:
     """
     Deep-dive on the top competing videos for a keyword.
@@ -535,13 +539,12 @@ def get_video_insights(
     like so they can model their own content strategy.
 
     Args:
-        keyword:         The YouTube keyword to research.
-        youtube_api_key: YouTube Data API v3 key. Falls back to YOUTUBE_API_KEY env var.
+        keyword: The YouTube keyword to research.
 
     Returns:
         Markdown report with video-level insights and pattern observations.
     """
-    key = _get_api_key(youtube_api_key)
+    key = _get_api_key()
     raw = _run_analysis(key, keyword)
 
     if "error" in raw:

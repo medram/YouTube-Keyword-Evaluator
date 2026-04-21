@@ -9,14 +9,65 @@ The centrepiece is `analyse_keyword()` which runs a full KOS
 (Keyword Opportunity Score) evaluation against the YouTube Data API v3.
 """
 
+import hashlib
+import json
+import logging
+import os
 import re
+import time
 from datetime import datetime, timezone
+from threading import Lock
+from typing import Any
+
+logger = logging.getLogger("uvicorn.error")
 
 try:
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
 except ImportError:
     raise ImportError("Missing: pip install google-api-python-client")
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  In-memory TTL cache
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Default: 1 hour.  Override with CACHE_TTL_SECONDS env var (0 = disabled).
+_CACHE_TTL: int = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
+
+# {cache_key: (result_dict, expires_at_epoch)}
+_cache: dict[str, tuple[dict[str, Any], float]] = {}
+_cache_lock = Lock()
+
+
+def _cache_key(keyword: str, settings: dict) -> str:
+    """Stable cache key from normalised keyword + settings fingerprint."""
+    kw_norm = keyword.strip().lower()
+    settings_hash = hashlib.md5(
+        json.dumps(settings, sort_keys=True).encode()
+    ).hexdigest()[:8]
+    return f"{kw_norm}|{settings_hash}"
+
+
+def cache_clear() -> int:
+    """Remove all cached entries. Returns the number of entries cleared."""
+    with _cache_lock:
+        count = len(_cache)
+        _cache.clear()
+    return count
+
+
+def cache_stats() -> dict[str, Any]:
+    """Return basic cache statistics."""
+    now = time.time()
+    with _cache_lock:
+        total = len(_cache)
+        expired = sum(1 for _, exp in _cache.values() if exp <= now)
+    return {
+        "total_entries": total,
+        "live_entries": total - expired,
+        "expired_entries": expired,
+        "ttl_seconds": _CACHE_TTL,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -237,9 +288,9 @@ def kw_position_pts(videos: list, keyword: str, max_pts: int) -> int:
     """Score based on avg keyword position in competing titles. Start = fewer pts."""
     positions = []
     for v in videos:
-        m = re.search(re.escape(keyword), v["Title"], re.IGNORECASE)
+        m = re.search(re.escape(keyword), v["title"], re.IGNORECASE)
         if m:
-            pos_ratio = m.start() / max(len(v["Title"]), 1)
+            pos_ratio = m.start() / max(len(v["title"]), 1)
             positions.append(pos_ratio)
     if not positions:
         return max_pts
@@ -365,6 +416,9 @@ def analyse_keyword(
     """
     Run a full KOS analysis for *keyword* using the YouTube Data API v3.
 
+    Results are cached in-memory for CACHE_TTL_SECONDS (default 3600 s).
+    Set CACHE_TTL_SECONDS=0 to disable caching.
+
     Returns a dict with:
       - keyword, kos, kos_label, kos_emoji, kos_color
       - score_a, score_b, score_c  (and their per-metric breakdowns)
@@ -381,6 +435,18 @@ def analyse_keyword(
     """
     if settings is None:
         settings = DEFAULT_SETTINGS.copy()
+
+    # ── Cache lookup ──────────────────────────────────────────────────────────
+    if _CACHE_TTL > 0:
+        key = _cache_key(keyword, settings)
+        now = time.time()
+        with _cache_lock:
+            entry = _cache.get(key)
+            if entry is not None:
+                result, expires_at = entry
+                if now < expires_at:
+                    return result
+                del _cache[key]
 
     S = settings
 
@@ -549,7 +615,7 @@ def analyse_keyword(
         c.pop("_vid_count", None)
         c.pop("_age_years", None)
 
-    return {
+    result = {
         "keyword": keyword,
         "kos": kos,
         "kos_label": label,
@@ -587,3 +653,10 @@ def analyse_keyword(
         "videos": videos,
         "top4_channels": top4,
     }
+
+    # ── Cache store ───────────────────────────────────────────────────────────
+    if _CACHE_TTL > 0:
+        with _cache_lock:
+            _cache[key] = (result, time.time() + _CACHE_TTL)
+
+    return result
